@@ -45,7 +45,8 @@ services:
 
   card-issuer:
     build:
-      context: ./card-issuer
+      context: .
+      dockerfile: card-issuer/Dockerfile
     container_name: card-issuer
     depends_on:
       kafka:
@@ -68,7 +69,8 @@ services:
 
   card-processor:
     build:
-      context: ./card-processor
+      context: .
+      dockerfile: card-processor/Dockerfile
     container_name: card-processor
     depends_on:
       kafka:
