@@ -15,5 +15,12 @@ export const env = {
   kafka: {
     clientId: process.env.KAFKA_CLIENT_ID ?? 'card-issuer',
     brokers: (process.env.KAFKA_BROKERS ?? 'localhost:9092').split(',')
+  },
+  db: {
+    host: process.env.DB_HOST ?? 'localhost',
+    port: toNumber(process.env.DB_PORT, 5432),
+    user: process.env.DB_USER ?? 'card_issuer',
+    password: process.env.DB_PASSWORD ?? 'card_issuer',
+    name: process.env.DB_NAME ?? 'card_issuer'
   }
 };

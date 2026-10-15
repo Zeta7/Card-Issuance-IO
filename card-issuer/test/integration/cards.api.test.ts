@@ -1,17 +1,26 @@
 import request from 'supertest';
+import { DataSource } from 'typeorm';
 import { Test } from '@nestjs/testing';
+import { APP_FILTER } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { INestApplication } from '@nestjs/common';
 
-import { AppModule } from '../../src/app.module';
-import { EVENT_PUBLISHER } from '../../src/shared/tokens';
+import { CARD_REPOSITORY, EVENT_PUBLISHER } from '../../src/shared/tokens';
 import type { EventPublisherPort } from '../../src/application/ports/event-publisher.port';
-import { CardStatusConsumer } from '../../src/infrastructure/kafka/consumers/card-status.consumer';
+import { IssueCardUseCase } from '../../src/application/use-cases/issue-card.use-case';
+import { GetCardsUseCase } from '../../src/application/use-cases/get-cards.use-case';
+import { CardController } from '../../src/infrastructure/http/controllers/card.controller';
+import { HealthController } from '../../src/infrastructure/http/controllers/health.controller';
+import { DomainErrorFilter } from '../../src/infrastructure/http/filters/domain-error.filter';
+import { InMemoryCardRepository } from '../../src/infrastructure/persistence/repositories/in-memory-card.repository';
 
 // La API se prueba de punta a punta (HTTP -> pipe de validación -> caso de
-// uso -> repositorio -> filtro de errores) levantando el AppModule real de
-// Nest y sustituyendo solo lo que toca un sistema externo: el publisher de
-// Kafka y el consumer de estados (si no, Nest intentaría conectarse a un
-// Kafka real al llamar app.init()).
+// uso -> repositorio -> filtro de errores) armando un módulo de Nest
+// equivalente al AppModule real, pero sin TypeOrmModule/KafkaEventPublisher:
+// ambos abren una conexión real apenas el módulo se inicializa, así que no
+// hay forma de "sobreescribirlos" después sin tocar una base/un broker de
+// verdad. En su lugar, se inyecta un repositorio en memoria real (el mismo
+// InMemoryCardRepository, no un mock) y un publisher fake.
 class FakePublisher implements EventPublisherPort {
   readonly published: { topic: string; message: unknown; key?: string }[] = [];
   isConnectedValue = true;
@@ -24,8 +33,6 @@ class FakePublisher implements EventPublisherPort {
     return this.isConnectedValue;
   }
 }
-
-const noopConsumer = { onModuleInit: jest.fn(), onModuleDestroy: jest.fn() };
 
 const buildPayload = (documentNumber = '11654321') => ({
   customer: {
@@ -45,12 +52,18 @@ describe('card-issuer API', () => {
   const buildApp = async () => {
     publisher = new FakePublisher();
 
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(EVENT_PUBLISHER)
-      .useValue(publisher)
-      .overrideProvider(CardStatusConsumer)
-      .useValue(noopConsumer)
-      .compile();
+    const moduleRef = await Test.createTestingModule({
+      imports: [ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 20 }] })],
+      controllers: [CardController, HealthController],
+      providers: [
+        IssueCardUseCase,
+        GetCardsUseCase,
+        { provide: CARD_REPOSITORY, useClass: InMemoryCardRepository },
+        { provide: EVENT_PUBLISHER, useValue: publisher },
+        { provide: DataSource, useValue: { isInitialized: true } },
+        { provide: APP_FILTER, useClass: DomainErrorFilter }
+      ]
+    }).compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
@@ -103,13 +116,14 @@ describe('card-issuer API', () => {
     expect(response.body).toHaveLength(1);
   });
 
-  it('GET /health responde ok cuando el publisher está conectado', async () => {
+  it('GET /health responde ok cuando el publisher y la base están conectados', async () => {
     await buildApp();
 
     const response = await request(app.getHttpServer()).get('/health');
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('ok');
+    expect(response.body.database).toBe('connected');
   });
 
   it('GET /health responde degraded cuando el publisher no está conectado', async () => {

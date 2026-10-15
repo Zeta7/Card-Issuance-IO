@@ -43,6 +43,23 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: card_issuer
+      POSTGRES_PASSWORD: card_issuer
+      POSTGRES_DB: card_issuer
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U card_issuer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   card-issuer:
     build:
       context: .
@@ -50,6 +67,8 @@ services:
     container_name: card-issuer
     depends_on:
       kafka:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     ports:
       - "3000:3000"
@@ -60,6 +79,11 @@ services:
       LOG_LEVEL: info
       KAFKA_CLIENT_ID: card-issuer
       KAFKA_BROKERS: kafka:29092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: card_issuer
+      DB_PASSWORD: card_issuer
+      DB_NAME: card_issuer
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 10s
@@ -80,3 +104,6 @@ services:
       LOG_LEVEL: info
       KAFKA_CLIENT_ID: card-processor
       KAFKA_BROKERS: kafka:29092
+
+volumes:
+  postgres-data:
